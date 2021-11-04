@@ -252,7 +252,7 @@ c
       REAL*8,dimension(nSys) :: signtau
 c
       ! plastic shear rate on slip systems
-      REAL*8,dimension(nSys) :: gammadot
+      REAL*8,dimension(nSys) :: gammaDot
 c
       ! GND density (immobile, mobile)
       REAL*8,dimension(nSys) :: gndcut
@@ -394,7 +394,7 @@ C     *** INITIALIZE ZERO ARRAYS ***
       thermat =0.
       expanse33=0.
       curlfp=0.
-      gammadot=0.
+      gammaDot=0.
       xNorm=0.
       xDir=0.
       tau=0.
@@ -889,7 +889,7 @@ C     *** ELASTIC DEFORMATION ***
       END IF ! end of PLASTIC DEFORMATION
 c      
       CALL kmatvec6(xstressmdef,xstressdef) !output stress
-      devstress = xstressmdef - 1./3.*trace(xstressmdef)*xI
+      devstress = xstressmdef - 1./3.*trace(xstressmdef)*xI  !deviatoric
       vms = sqrt(3./2.*(sum(devstress*devstress))) !von mises stress 
 c
 c
@@ -1035,9 +1035,9 @@ c
         usvars(80+j+(i-1)*3) = Fp(i,j)
        END DO
       END DO   
-c
-      if (iphase == 5) then ! orthorombic alpha-Uranium model
-c
+c     
+c     Output for orthorombic alpha-Uranium material
+      if (iphase == 5) then 
       ! rewrite gndcut state variables
       ! for the alpha-Uranium model
         DO i=1,nSys
@@ -1045,13 +1045,13 @@ c
         END DO
         usvars(65) = rhosub
         DO i=1,nSys
-	  usvars(98+i) = tauc(i)
+	    usvars(98+i) = tauc(i)
         END DO
-        ! output some of the plastic strain rates on the slip systems
+      ! output some of the plastic strain rates on the slip systems
         usvars(90) = gammaDot(1)
         usvars(91) = gammaDot(2)
         usvars(92) = gammaDot(3)
-        usvars(93) = gammaDot(4)
+        usvars(93) = gammaDot(4)         
         usvars(94) = gammatwindot(nTwinStart)
         usvars(95) = gammatwindot(nTwinEnd)
         usvars(96) = TwinIntegral(nTwinStart)
@@ -1062,9 +1062,30 @@ c
         DO i=1,nTwin ! twin CRSS
           usvars(112+i) = tauctwin(i)
         END DO
-c
-      end if
+      else
+c     output for all other material models          
+CHRISTOS START          
+       ! gammaDot for all slip planes
+        usvars(90) = gammaDot(1)
+        usvars(91) = gammaDot(2)
+        usvars(92) = gammaDot(3)
+        usvars(93) = gammaDot(4)         
+        usvars(94) = gammaDot(5)
+        usvars(95) = gammaDot(6)
+        usvars(96) = gammaDot(7)
+        usvars(97) = gammaDot(8)
+        usvars(98) = gammaDot(9)
+        usvars(99) = gammaDot(10)
+        usvars(100) = gammaDot(11)
+        usvars(101) = gammaDot(12)
+       ! CRSS for all slip planes (no twin variables here)
+        DO i=1,nSys
+	    usvars(101+i) = tauc(i)
+        END DO
+      endif           
+CHRISTOS END
 c
       RETURN
 c
       END
+
