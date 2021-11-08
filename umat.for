@@ -30,6 +30,9 @@ CHRISTOS START
 c The temperature field, the load and the periodic boundary conditions are respectively defined in: UDISP, DLOAD, MPC      
       ! 0 = off ; 1 = on 
       integer, parameter :: singlecrystal = 1
+c      
+c   Define crystal orientation via ORIENT routine which provides transformation matrix T
+      real*8 :: T(3,3)
 CHRISTOS END      
 c      
       ! activate debug mode with Visual Studio
@@ -220,14 +223,22 @@ c
 c
          STATEV = 0.
 c
+CHRISTOS START
+         call ORIENT(T,NOEL,NPT,LAYER,KSPT,COORDS,BASIS,
+     1 ORNAME,NNODES,CNODES,JNNUM) 
          ! read rotation matrix from the material constants
          ! 2 to 10 in the input file
          ! and assign to state variables 1 to 9
          ! order of the components in the input file must be
          ! R11, R12, R13, R21, R22, R23, R31, R32, R33
+c         do i=1,3
+c           do j=1,3
+c             STATEV(j+(i-1)*3) = props(j+1+((i-1)*3))
+c           end do
+c         end do
          do i=1,3
            do j=1,3
-             STATEV(j+(i-1)*3) = props(j+1+((i-1)*3))
+             STATEV(j+(i-1)*3) = T(i,j)
            end do
          end do
 c
@@ -459,6 +470,7 @@ c
       include 'kCRSS.f'
       include 'kHardening.f'
 CHRISTOS START
+      include 'ORIENT.f'
 c      include 'MPC.f'
       include 'DISP.f'
       include 'DLOAD.f'
