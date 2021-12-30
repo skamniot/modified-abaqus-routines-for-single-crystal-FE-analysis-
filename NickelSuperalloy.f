@@ -12,7 +12,7 @@ C   Simplified Double exponent slip rule and empirical creep law for tertiary cr
 	  
 	  ! number of slip system
       integer, intent(in):: nSys
-        ! activation flag for cubic slip
+        ! activation flag for cubic slip (additional 6 systems activated when loading is along 111)
       INTEGER,intent(in) :: cubicslip
         ! activation flag for tertiary creep
       INTEGER,intent(in) :: creep
@@ -75,25 +75,25 @@ c
         real*8, parameter :: q = 1.15      ! real 1.15
 c
 *** TERTIARY CREEP (dislocation climb & damage)
-   !!!!  Initial creep rate        
+   !!!!  Initial creep rate constants        
       ! Activation energy for creep (J/mol)
       real*8, parameter :: Qo = 460000.0
-      ! Initial creep rate (1/s)
+      ! reference rate (1/s)
       real*8, parameter :: ao = 4.0e8 
       ! stress multiplier (1/MPa)
       real*8, parameter :: bo = 3.2e-2
-   !!!!  Initial creep rate    
+   !!!!  Climb/damage constants  
       ! Activation energy for damage (J/mol)
-      real*8, parameter :: QD = 120000.0
-      ! Initial creep rate (1/s)
-      real*8, parameter :: aD = 1.0e-1
+      real*8, parameter :: QD = 340000.0
+      ! reference rate (1/s)
+      real*8, parameter :: aD = 6000000.0
       ! stress multiplier (1/MPa)
-      real*8, parameter :: bD = 3.0e-2
+      real*8, parameter :: bD = -5.0e-08
    !!!!  Rafting   
-      real*8, parameter :: SS = 100
-      real*8, parameter :: TT = 1000 
-      real*8, parameter :: QQ = 20000
-      real*8, parameter :: m = -3
+C      real*8, parameter :: SS = 100
+C      real*8, parameter :: TT = 1000 
+C      real*8, parameter :: QQ = 20000
+C      real*8, parameter :: m = -3
 	  
 **       End of parameters to set       **
 ******************************************
@@ -145,7 +145,7 @@ C
            
         if (tau_ratio >= 1.0) then ! avoid negative values before elevating to power q
             
-            gammaDot(i) = signtau(i)*gammadot0 
+            gammaDot(i) = signtau(i)*gammadot0  !*exp(-dF/(kB*(CurrentTemperature+273.15)))
             
         else ! standard case
             
@@ -155,15 +155,17 @@ C
                dF=Fcubic
             end if   
             
+            ! strain rate due to thermally activated glide (rate dependent plasticity)
             gammaDot(i) = signtau(i)*gammadot0*exp(-(dF/(kB*(CurrentTemperature+273.15)))*(1- tau_ratio**p)**q)
             
         end if
 		 
-        if (creep == 1) then
+        !  add tertiary creep strain rate
+        if (creep == 1) then  
            
           gammaDot(i) = gammaDot(i) +
-     +                  signtau(i)*ao*exp(bo*tau(i)-Qo/(R*(CurrentTemperature+273.15))) +
-     +                  signtau(i)*abs(usvars(89+i))*ao*aD*exp((bo-bD)*tau(i)-(Qo-QD)/(R*(CurrentTemperature+273.15)))
+     +                  signtau(i)*ao*exp(bo*tau(i) -Qo/(R*(CurrentTemperature+273.15))) +
+     +                  signtau(i)*abs(usvars(89+i))*aD*exp(bD*tau(i) -QD/(R*(CurrentTemperature+273.15)))
                             
         end if
         
@@ -188,7 +190,7 @@ C
           if (creep == 1) then
           
              result1 = result1 + ao*bo*exp(bo*tau(i)-Qo/(R*(CurrentTemperature+273.15))) +
-     +                 abs(usvars(89+i))*ao*aD*(bo-bD)*exp((bo-bD)*tau(i)-(Qo-QD)/(R*(CurrentTemperature+273.15)))
+     +                 abs(usvars(89+i))*aD*bD*exp(bD*tau(i)-QD/(R*(CurrentTemperature+273.15)))
               
           end if   
           
