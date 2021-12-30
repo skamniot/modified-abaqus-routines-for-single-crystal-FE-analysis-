@@ -6,14 +6,14 @@ c
       SUBROUTINE kMaterialParam(iphase,caratio,compliance,G12,thermat,
      + gammast,burgerv,nSys,tauc,screwplanes,Temperature,
      + tauctwin,nTwin,twinon,nTwinStart,nTwinEnd,TwinIntegral,
-     + singlecrystal)
+     + singlecrystal, cubicslip)
 c
       ! crystal type
       INTEGER,intent(in) :: iphase
 c      
 CHRISTOS START
-      ! activate case of single crystal body
       INTEGER,intent(in) :: singlecrystal
+      INTEGER,intent(in) :: cubicslip
 CHRISTOS END            
 c
       ! number of slip systems
@@ -218,10 +218,24 @@ CHRISTOS START
         case('CMSX4')
 c
         ! CRSS (MPa units)
-        XTAUC1 = 30.0
+        if (Temperature .LE. 850.0) then   !  Celcius units
+           tauc=-0.000000001051*Temperature**4 
+     +                 + 0.000001644382*Temperature**3
+     +                -0.000738679333*Temperature**2 + 0.128385617901*Temperature 
+     +                +446.547978926622
+           if (cubicslip == 1) then
+             tauc(13:18)=-0.000000001077*Temperature**4 
+     +                + 0.000001567820*Temperature**3
+     +                -0.000686532147*Temperature**2 - 0.074981918833*Temperature 
+     +                +571.706771689334
+           end if
+        else
+           tauc=-1.1707*Temperature + 1478.9
+           if (cubicslip == 1) then
+             tauc(13:18)=-0.9097*Temperature + 1183
+           end if
+        end if
 c
-        ! Burgers vectors (um)
-        burger1 = 2.55E-4
 c
         ! temperature dependent stiffness constants (MPa units)
         if (Temperature .LE. 800.0) then   !  Celcius units
@@ -234,7 +248,7 @@ c
         end if  
         G12=-0.00002066*Temperature**3+0.021718*Temperature**2
      +       -38.3179*Temperature+129864
-c        C11=199E3 (temperature idnependent case - can be used for verification)
+c        C11=199E3 (temperature idnependent case - for verification)
 c        C12=141E3
 c        G12=93E3
         E1 = (C11-C12)*(C11+2*C12)/(C11+C12)
@@ -242,7 +256,7 @@ c        G12=93E3
 c
         ! temperature dependent thermal expansion coefficient
         alpha1 = 9.119E-9*Temperature +1.0975E-5
-c       alpha1 = 20.1E-6  (temperature idnependent case - can be used for verification)
+c       alpha1 = 20.1E-6  (temperature idnependent case - for verification)
 c
         ! prefactor for SSD evolution equation
         gammast = 0.0
@@ -266,11 +280,9 @@ c
       alpha3 = alpha1
 c      
       ! assign Burgers vector scalars
-      burgerv = burger
+      burgerv = 2.55E-4
 c
-      ! assign CRSS: same for all slip systems
-      tauc = XTAUC1
-c      
+c
       case(3) ! carbide
 c
         SELECT CASE(matname)
@@ -281,7 +293,7 @@ c
         XTAUC1 = 2300.0
 c
         ! Burgers vectors (um)
-        burger = 3.5072e-4
+        burger1 = 3.5072e-4
 c
         ! elastic constants (MPa units)
         E1 = 207.0E+4
@@ -304,7 +316,7 @@ c
       G23 = G12
 c    
       ! assign Burgers vector scalars
-      burgerv = burger
+      burgerv = burger1
 c
       ! assign CRSS: same for all slip systems
       tauc = XTAUC1
