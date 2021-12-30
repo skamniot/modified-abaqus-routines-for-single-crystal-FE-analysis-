@@ -6,7 +6,8 @@ c
       SUBROUTINE kmat(dtime,nsvars,usvars,xI,jelem,kint,time,F,
      + L,iphase,irradiate,C,stressvec,dstressinc,totstran,dtotstran,
      + TEMP,DTEMP,vms,pdot,pnewdt,gndon,nSys,nTwin,ns,coords,
-     + TwinIntegral,nTwinStart,nTwinEnd,twinon,singlecrystal)
+     + TwinIntegral,nTwinStart,nTwinEnd,twinon,singlecrystal, cubicslip,
+     + creep)
 c
       INCLUDE 'ABA_PARAM.INC'
 c
@@ -28,6 +29,8 @@ c
 CHRISTOS START
       ! activate case of single crystal body
       INTEGER,intent(in) :: singlecrystal
+      INTEGER,intent(in) :: cubicslip
+      INTEGER,intent(in) :: creep
 CHRISTOS END      
 c
       ! GND activation flag
@@ -101,7 +104,9 @@ c
       ! 5 = Original slip rule with GND coupling 
       ! 6 = Slip rule with constants alpha and beta: alpha.sinh[ beta(tau-tauc)sgn(tau) ]
       ! 7 = Powerlaw plasticity
-      integer, parameter :: kslip = 7
+      ! 8 = Double Exponent law
+      ! 9 = 'Nickel_supperalloy' coupled double exponent law and tertiary creep law (additive)
+      integer, parameter :: kslip = 9
 c
       ! initial temperature and temperature rate
       real*8, parameter :: Temperature = 293.0
@@ -132,7 +137,7 @@ c
       ! number of active slip systems considered
       integer, parameter :: L0=12 ! HCP
       integer, parameter :: L1=12 ! BCC
-      integer, parameter :: L2=12 ! FCC
+      integer :: L2 ! FCC  (christos uses it as a variable)
       integer, parameter :: L4=7  ! Olivine
       integer, parameter :: LalphaUranium=8 ! alpha-uranium
 c
@@ -245,6 +250,11 @@ c
 c
       ! rotated slip normals and directions (gmatinv)
       REAL*8,dimension(nSys,M) :: xNorm,xDir
+c
+c CRHSITOS START
+      ! Back stress for double exponent law
+      REAL*8,dimension(nSys) :: Backstress
+c CRHSITOS END 
 c
       ! resolved shear stress on slip system
       ! and its sign
@@ -417,6 +427,7 @@ C     *** INITIALIZE ZERO ARRAYS ***
       tauctwin(1:nTwin) = 0.0
       rhossd = 0.0
       pdot = 0.0
+      Backstress = 0.0
 c
       ! define identity matrix
       DO I=1,KM; xIden6(I,I)=1.; END DO      
@@ -439,7 +450,7 @@ c
       call kMaterialParam(iphase,caratio,compliance,G12,thermat,
      + gammast,burgerv,nSys,tauc,screwplanes,CurrentTemperature,
      + tauctwin,nTwin,twinon,nTwinStart,nTwinEnd,TwinIntegral,
-     + singlecrystal)
+     + singlecrystal, cubicslip)
 c
       ! define rotation matrices due to twinning (in the lattice system)
       TwinRot = 0.0
@@ -566,7 +577,7 @@ c
 C     *** DIRECTIONS FROM LATTICE TO DEFORMED AND TWINNED SYSTEM ***
 
       CALL kdirns(gmatinv,TwinRot,iphase,nSys,nTwin,xDir,xNorm,
-     + xTwinDir,xTwinNorm,caratio)
+     + xTwinDir,xTwinNorm,caratio, cubicslip)
 c
 c
 C     *** STIFFNESS FROM LATTICE TO DEFORMED SYSTEM ***
@@ -716,6 +727,20 @@ c
      +        rhossd,twinvolfrac,twinvolfractotal,
      +        Lp,tmat,gammaDot,gammatwindot,twinon,
      +        nTwinStart,nTwinEnd)
+c      
+      ELSE IF (kslip == 8) THEN 
+      ! Double Exponent law 
+c      
+      CALL  kslipDoubleExponent(xNorm,xDir,tau,signtau,tauc,
+     + burgerv,dtime,nSys,iphase,CurrentTemperature,Backstress,Lp,
+     + tmat,gammaDot)
+c      
+      ELSE IF (kslip == 9) THEN 
+      ! Plasticity-tertiary creep law for Nickel superalloys
+c      
+      CALL  NickelSuperalloy(xNorm,xDir,tau,signtau,tauc,
+     + burgerv,dtime,nSys,iphase,CurrentTemperature,Lp,
+     + tmat,gammaDot, cubicslip, creep, usvars, nsvars)
 c
       END IF
 c
@@ -1062,30 +1087,24 @@ c     Output for orthorombic alpha-Uranium material
         DO i=1,nTwin ! twin CRSS
           usvars(112+i) = tauctwin(i)
         END DO
-      else
-c     output for all other material models          
-CHRISTOS START          
-       ! gammaDot for all slip planes
-        usvars(90) = gammaDot(1)
-        usvars(91) = gammaDot(2)
-        usvars(92) = gammaDot(3)
-        usvars(93) = gammaDot(4)         
-        usvars(94) = gammaDot(5)
-        usvars(95) = gammaDot(6)
-        usvars(96) = gammaDot(7)
-        usvars(97) = gammaDot(8)
-        usvars(98) = gammaDot(9)
-        usvars(99) = gammaDot(10)
-        usvars(100) = gammaDot(11)
-        usvars(101) = gammaDot(12)
-       ! CRSS for all slip planes (no twin variables here)
-        DO i=1,nSys
-	    usvars(101+i) = tauc(i)
-        END DO
-      endif           
-CHRISTOS END
+      end if
+c     
+!=======================CHRISTOS OUTPUT=======================             
+      if (singlecrystal == 1) then
+        do i=1,nSys
+          !  shear strain rate in slip systems          
+!          usvars(89+i) = gammaDot(i)
+          ! accumulated shear strains in slip systems          
+          usvars(89+i) = usvars(89+i) +  gammaDot(i) * dtime
+          ! RSS in slip systems
+          usvars(107+i) = tau(i)
+        end do
+          ! maximum RSS
+          usvars(125)=maxval(abs(tau))
+          usvars(126)=usvars(95)
+      end if           
+!============================================================
 c
       RETURN
 c
       END
-
