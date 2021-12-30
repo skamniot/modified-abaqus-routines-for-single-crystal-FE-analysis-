@@ -30,9 +30,11 @@ CHRISTOS START
 c The temperature field, the load and the periodic boundary conditions are respectively defined in: UDISP, DLOAD, MPC      
       ! 0 = off ; 1 = on 
       integer, parameter :: singlecrystal = 1
+c Activate cubic slip systems for single crystal FCC
+      integer, parameter :: cubicslip = 0
+c Activate tertiary creep for single crystal FCC
+      integer, parameter :: creep = 1          
 c      
-c   Define crystal orientation via ORIENT routine which provides transformation matrix T
-      real*8 :: T(3,3)
 CHRISTOS END      
 c      
       ! activate debug mode with Visual Studio
@@ -125,10 +127,10 @@ c
       ! number of active slip systems considered
       integer :: L0=12 ! HCP
       integer :: L1=12 ! BCC
-      integer :: L2=12 ! FCC
+      integer :: L2 ! FCC   (Christos uses it as a variable)
       integer :: L4=7  ! Olivine
       integer :: LalphaUranium=8 ! alpha-uranium
-c
+c      
       ! crystal type
       ! first material constant in the input file
       ! 0 = HCP
@@ -145,7 +147,7 @@ c
       real*8 :: TwinIntegral(TotalNTwin)
 c
       ! position of the Gauss point in the C3D8 parent element
-      PARAMETER ( xgauss = 0.577350269189626) 
+      PARAMETER ( xgauss = 0.577350269189626 ) 
 c
       include 'mycommon.f'
 c
@@ -180,9 +182,16 @@ c
           return
       end if   
 c
+CHRISTOS START - increase slip systems if cubic slip is activated     
+      if (cubicslip == 0) then
+        L2=12
+      else  
+        L2=18
+      end if
+CHRISTOS END      
       ! read crystal type from input file
       ! first material constant
-      iphase = int(props(1))
+      iphase = int(props(1))      
 c
       SELECT CASE(iphase)
       CASE(0) !hcp
@@ -222,30 +231,28 @@ c
       if (kinc <= 1 .and. kstep==1) then
 c
          STATEV = 0.
-c
-CHRISTOS START
-         call ORIENT(T,NOEL,NPT,LAYER,KSPT,COORDS,BASIS,
-     1 ORNAME,NNODES,CNODES,JNNUM) 
+c      
          ! read rotation matrix from the material constants
          ! 2 to 10 in the input file
          ! and assign to state variables 1 to 9
          ! order of the components in the input file must be
          ! R11, R12, R13, R21, R22, R23, R31, R32, R33
+         do i=1,3
+            do j=1,3
+             STATEV(j+(i-1)*3) = props(j+1+((i-1)*3))
+            end do
+         end do
+c         call lapinverse(T,M,info,Tinv)
 c         do i=1,3
 c           do j=1,3
-c             STATEV(j+(i-1)*3) = props(j+1+((i-1)*3))
+c             STATEV(j+(i-1)*3) = Tinv(i,j)
 c           end do
 c         end do
-         do i=1,3
-           do j=1,3
-             STATEV(j+(i-1)*3) = T(i,j)
-           end do
-         end do
 c
          ! Initialize plastic deformation gradient
          ! to identity
-	 STATEV(81) = 1.0
-	 STATEV(85) = 1.0
+	   STATEV(81) = 1.0
+	   STATEV(85) = 1.0
          STATEV(89) = 1.0
 c
          ! initialize cumulative plastic slip to zero
@@ -385,7 +392,8 @@ c
       call kmat(dtime,NSTATV,STATEV,xI,NOEL,NPT,time,F,
      +    L,iphase,irradiate,DDSDDE,stressvec,dstressinc,totstran,
      +    dtotstran,TEMP,DTEMP,vms,pdot,pnewdt,gndon,nSys,nTwin,ns,
-     +    coords,TwinIntegral,nTwinStart,nTwinEnd,twinon,singlecrystal)
+     +    coords,TwinIntegral,nTwinStart,nTwinEnd,twinon,singlecrystal,
+     +    cubicslip, creep)
 c
       ! store twin phase field
       ! in common block variable
@@ -396,8 +404,11 @@ c
 c
       ! store UEL variable in STATEV
       ! for output
-      STATEV(124) = kDeltaEff(noel,npt)
-      STATEV(125) = kSigma0(noel,npt)
+C CHRISTOS      
+      if (singlecrystal == 0) then
+        STATEV(124) = kDeltaEff(noel,npt)
+        STATEV(125) = kSigma0(noel,npt)
+      end if  
 c
 C    RECOVER stress for calculating residual force
       DO K=1,6
@@ -470,10 +481,12 @@ c
       include 'kCRSS.f'
       include 'kHardening.f'
 CHRISTOS START
-      include 'ORIENT.f'
+c      include 'ORIENT.f'
 c      include 'MPC.f'
-      include 'DISP.f'
-      include 'DLOAD.f'
+      include 'DISPfull.f'
+      include 'DLOADfull.f'
+      include 'kslipDoubleExponent.f'
+      include 'NickelSuperalloy.f'
 CHRISTOS END  
 
             
