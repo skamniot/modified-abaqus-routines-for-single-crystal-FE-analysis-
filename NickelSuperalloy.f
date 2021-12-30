@@ -145,7 +145,7 @@ C
            
         if (tau_ratio >= 1.0) then ! avoid negative values before elevating to power q
             
-            gammaDot(i) = signtau(i)*gammadot0  !*exp(-dF/(kB*(CurrentTemperature+273.15)))
+            gammaDot(i) = signtau(i)*gammadot0 
             
         else ! standard case
             
