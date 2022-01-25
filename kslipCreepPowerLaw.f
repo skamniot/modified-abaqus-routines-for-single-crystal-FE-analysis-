@@ -1,8 +1,8 @@
-C   Christos Skamniotis
+C   Christos Skamniotis & Nicolo Grilli
 C   University of Oxford
 C   December 2021 
 C
-C   Simplified Double exponent slip rule and empirical creep law for tertiary creep:
+C   Power law plasticity coupled with empirical creep law for tertiary creep:
 
       subroutine kslipCreepPowerLaw(xNorm,xDir,tau,signtau,tauc,
      +  dtime,nSys,iphase,Temperature,Lp,
@@ -59,7 +59,7 @@ C   Simplified Double exponent slip rule and empirical creep law for tertiary cr
 *** RATE DEPENDENT PLASTICITY (thermally activated glide)
 
       ! reference strain rate (1/s)
-	  real*8, parameter :: ref_gammaDot = 7.071136E-05
+	  real*8, parameter :: ref_gammaDot = 7.071136e-5
       ! rate sensitivity multiplier (1/Kelvin)
 	  real*8, parameter :: slopeM = -0.036273
       ! rate sensitivity constant (-/-)
@@ -80,6 +80,12 @@ C   Simplified Double exponent slip rule and empirical creep law for tertiary cr
       real*8, parameter :: aD = 6.0e-1
       ! stress multiplier (1/MPa)
       real*8, parameter :: bD = 3.5e-2
+***      
+      ! prefactor parameters used for better convergence at low tau values
+      ! multiplier
+      real*8, parameter :: mult = 0.5
+      ! power
+      real*8, parameter :: pow = 20.0
 	  
 **       End of parameters to set       **
 ******************************************
@@ -110,6 +116,9 @@ C   Simplified Double exponent slip rule and empirical creep law for tertiary cr
 
 	  ! rate sensitivity
 	  real*8 :: mpower
+        
+        ! prefactor
+	  real*8 :: prefactor
 
 C
 C  *** CALCULATE LP AND THE DERIVATIVE OF PLASTIC STRAIN INCREMENT WITH 
@@ -135,14 +144,20 @@ C
             result1 = ref_gammaDot*mpower*(1/tauc(i))*(tau_ratio**(mpower-1))
           
         !  add tertiary creep rate
-        if (creep == 1 .and. tau_ratio > 0.05) then  
+        if (creep == 1) then  
            
-          gammaDot(i) =  gammaDot(i)+
-     +                   signtau(i)*(  ao*exp(bo*tau(i)  -Qo/(R*Temperature))  )+
-     +                   signtau(i)*(  abs(usvars(89+i))*aD*exp(bD*tau(i)  -QD/(R*Temperature))  )
+          prefactor=(mult*tau(i)/(1+mult*tau(i)))**pow
           
-          result1 = result1 + ao*bo*exp(bo*tau(i)-Qo/(R*Temperature)) +
-     +             abs(usvars(89+i))*aD*bD*exp(bD*tau(i)-QD/(R*Temperature))
+          gammaDot(i) =  gammaDot(i)+
+     +                   signtau(i)*prefactor*
+     +                                    (  ao*exp(bo*tau(i)-Qo/(R*Temperature))+
+     +                    abs(usvars(89+i))*aD*exp(bD*tau(i)-QD/(R*Temperature))  )
+          
+          result1 = result1 + prefactor*(ao*bo*exp(bo*tau(i)-Qo/(R*Temperature)) +
+     +                  abs(usvars(89+i))*aD*bD*exp(bD*tau(i)-QD/(R*Temperature)))+
+     +              pow*(((mult*tau(i))/(1+mult*tau(i)))**(pow-1))*mult/((1+mult*tau(i))**2)* 
+     +                     (  ao*exp(bo*tau(i)-Qo/(R*Temperature))+
+     +                    abs(usvars(89+i))*aD*exp(bD*tau(i)-QD/(R*Temperature))  )
           
         end if
         
