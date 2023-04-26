@@ -6,7 +6,7 @@ C   Simplified Double exponent slip rule and empirical creep law for tertiary cr
 
       subroutine NickelSuperalloy(xNorm,xDir,tau,signtau,tauc,
      + burgerv,dtime,nSys,iphase,CurrentTemperature,Lp,
-     + tmat,gammaDot, cubicslip,creep, usvars, nsvars)
+     + tmat,gammaDot,cubicslip,creep,usvars,nsvars)
       
       implicit none
 	  
@@ -37,7 +37,7 @@ C   Simplified Double exponent slip rule and empirical creep law for tertiary cr
 	  ! time step
       real*8, intent(in) :: dtime	  
 	  
-	  ! Temperature
+	  ! Temperature in Celcius 
 	  real*8, intent(in) :: CurrentTemperature
         
       ! Abaqus state variables
@@ -65,35 +65,30 @@ c
 *** RATE DEPENDENT PLASTICITY (thermally activated glide)
 
       ! Activation energy for octahedral slip  (J)
-        real*8, parameter :: Foctahedral = 9.39e-19
+        real*8, parameter :: Foctahedral = 9.4e-19
       ! Activation energy for cubic slip  (J)
         real*8, parameter :: Fcubic = 1.17e-18
       ! reference strain rate (1/s)
-	  real*8, parameter :: gammadot0 = 1.0e7    ! real 1.0e-7
+	  real*8, parameter :: ref_gammaDot = 3.06E-05    ! real 1.0e-7
       ! rate sensitivity exponents 
-	  real*8, parameter :: p = 0.78      ! real 0.78
-        real*8, parameter :: q = 1.15      ! real 1.15
+	  real*8, parameter :: p = 0.6      ! real 0.78
+        real*8, parameter :: q = 1      ! real 1.15
 c
 *** TERTIARY CREEP (dislocation climb & damage)
    !!!!  Initial creep rate constants        
       ! Activation energy for creep (J/mol)
-      real*8, parameter :: Qo = 460000.0
+      real*8, parameter :: Qo = 440.0e3
       ! reference rate (1/s)
-      real*8, parameter :: ao = 4.0e8 
+      real*8, parameter :: ao = 6.0e7 
       ! stress multiplier (1/MPa)
-      real*8, parameter :: bo = 3.2e-2
+      real*8, parameter :: bo = 5.0e-2
    !!!!  Climb/damage constants  
       ! Activation energy for damage (J/mol)
-      real*8, parameter :: QD = 340000.0
+      real*8, parameter :: QD = 340.0e3
       ! reference rate (1/s)
-      real*8, parameter :: aD = 6000000.0
+      real*8, parameter :: aD = 6.0e6
       ! stress multiplier (1/MPa)
-      real*8, parameter :: bD = -5.0e-08
-   !!!!  Rafting   
-C      real*8, parameter :: SS = 100
-C      real*8, parameter :: TT = 1000 
-C      real*8, parameter :: QQ = 20000
-C      real*8, parameter :: m = -3
+      real*8, parameter :: bD = -5.0e-2
 	  
 **       End of parameters to set       **
 ******************************************
@@ -125,6 +120,9 @@ C      real*8, parameter :: m = -3
         
         ! RSS/CRSS ratio
 	  real*8 :: tau_ratio
+        
+        ! temp in K
+	  real*8 :: Temperature        
       
 C
 C
@@ -132,6 +130,9 @@ C  *** CALCULATE LP AND THE DERIVATIVE OF PLASTIC STRAIN INCREMENT WITH
 C   RESPECT TO THE STRESS DEFINED AS tmat***
 C
 C
+        Temperature = CurrentTemperature + 273.15
+        write(*,*) "TEMP", Temperature
+ 
         tmat = 0.0
 	  Lp = 0.0
 	  result4 = 0.0
@@ -141,35 +142,47 @@ C
 	  
         tau_ratio=tau(i)/tauc(i)
 
-       if  (tau_ratio >= 0.0) then
+       if  (tau_ratio > 0.0) then
            
-        if (tau_ratio >= 1.0) then ! avoid negative values before elevating to power q
-            
-            gammaDot(i) = signtau(i)*gammadot0  !*exp(-dF/(kB*(CurrentTemperature+273.15)))
-            
-        else ! standard case
+         if (tau_ratio < 1.0) then ! avoid negative values before elevating to power q
             
             dF=Foctahedral
             
-            if (i .gt. 12) then
+            if (i > 12) then
                dF=Fcubic
             end if   
             
             ! strain rate due to thermally activated glide (rate dependent plasticity)
-            gammaDot(i) = signtau(i)*gammadot0*exp(-(dF/(kB*(CurrentTemperature+273.15)))*(1- tau_ratio**p)**q)
+            gammaDot(i) = signtau(i)*ref_gammaDot*exp(-(dF/(kB*Temperature))*(1- tau_ratio**p)**q)
             
-        end if
-		 
-        !  add tertiary creep strain rate
-        if (creep == 1) then  
+            ! calculate derivative d ( gammaDot(i) ) / d ( tau(i) )
+            result1 = abs(gammaDot(i))
+            result1 = result1 * (-dF/(kB*Temperature))
+            result1 = result1 * q* (1- tau_ratio**p)**(q-1.0)
+            result1 = result1 * (-p*tau_ratio**(p-1.0))
+            result1 = result1 / tauc(i)
+       
+         else
+             
+            gammaDot(i) = signtau(i)*ref_gammaDot
+            result1 = abs(gammaDot(i))
+            
+         end if
+          
+          
+        !  add tertiary creep rate
+        if (creep == 1 .and. tau_ratio > 0.05) then  
            
-          gammaDot(i) = gammaDot(i) +
-     +                  signtau(i)*ao*exp(bo*tau(i) -Qo/(R*(CurrentTemperature+273.15))) +
-     +                  signtau(i)*abs(usvars(89+i))*aD*exp(bD*tau(i) -QD/(R*(CurrentTemperature+273.15)))
+          gammaDot(i) =  gammaDot(i)+
+     +                   signtau(i)*(  ao*exp(bo*tau(i)  -Qo/(R*Temperature))  )+
+     +                   signtau(i)*(  abs(usvars(89+i))*aD*exp(bD*tau(i)  -QD/(R*Temperature))  )
+          
+          result1 = result1 + ao*bo*exp(bo*tau(i)-Qo/(R*Temperature)) +
+     +             abs(usvars(89+i))*aD*bD*exp(bD*tau(i)-QD/(R*Temperature))
                             
         end if
         
-        
+        ! calculate SNNS
           tempNorm = xNorm(i,:)
           tempDir = xDir(i,:)
           SNij = spread(tempDir,2,3)*spread(tempNorm,1,3)
@@ -177,27 +190,11 @@ C
           call KGMATVEC6(SNij,sni)         
           call KGMATVEC6(NSij,nsi) 
           SNNS = spread(sni,2,6)*spread(nsi,1,6)
-		  
-          ! calculate derivative d ( gammaDot(i) ) / d ( tau(i) )
-          result1 = abs(gammaDot(i))
-          result1 = result1 * dF/(kB*(CurrentTemperature+273.15))
-          result1 = result1 * q
-          result1 = result1 * (1- tau_ratio**p)**(q-1.0)
-          result1 = result1 * p
-          result1 = result1 / tauc(i)
-          result1 = result1 * tau_ratio**(p-1.0)
-          
-          if (creep == 1) then
-          
-             result1 = result1 + ao*bo*exp(bo*tau(i)-Qo/(R*(CurrentTemperature+273.15))) +
-     +                 abs(usvars(89+i))*aD*bD*exp(bD*tau(i)-QD/(R*(CurrentTemperature+273.15)))
-              
-          end if   
-          
-		  ! contribution to Jacobian
+  
+        ! contribution to Jacobian
           result4 = result4 + dtime*result1*SNNS     
 		  
-		  ! plastic velocity gradient contribution
+        ! plastic velocity gradient contribution
           Lp = Lp + gammaDot(i)*SNij 
 		
         else   

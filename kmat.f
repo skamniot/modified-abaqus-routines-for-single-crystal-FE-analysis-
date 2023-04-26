@@ -6,8 +6,7 @@ c
       SUBROUTINE kmat(dtime,nsvars,usvars,xI,jelem,kint,time,F,
      + L,iphase,irradiate,C,stressvec,dstressinc,totstran,dtotstran,
      + TEMP,DTEMP,vms,pdot,pnewdt,gndon,nSys,nTwin,ns,coords,
-     + TwinIntegral,nTwinStart,nTwinEnd,twinon,singlecrystal, cubicslip,
-     + creep)
+     + TwinIntegral,nTwinStart,nTwinEnd,twinon,cubicslip)
 c
       INCLUDE 'ABA_PARAM.INC'
 c
@@ -24,14 +23,7 @@ c
       INTEGER,intent(in) :: iphase
 c
       ! activate irradiation effect
-      INTEGER,intent(in) :: irradiate
-c      
-CHRISTOS START
-      ! activate case of single crystal body
-      INTEGER,intent(in) :: singlecrystal
-      INTEGER,intent(in) :: cubicslip
-      INTEGER,intent(in) :: creep
-CHRISTOS END      
+      INTEGER,intent(in) :: irradiate    
 c
       ! GND activation flag
       INTEGER,intent(in) :: gndon
@@ -52,6 +44,8 @@ c
 c
       ! twin systems activation flag
       INTEGER,intent(in) :: twinon
+      
+      INTEGER,intent(in) :: cubicslip
 c
       ! time increment
       REAL*8,intent(in) :: dtime
@@ -91,6 +85,9 @@ c
 c
       ! Von Mises stress
       REAL*8,intent(out) :: vms
+      
+CCCCCCC  suggested time increment
+c      REAL*8,intent(inout) :: pnewdt
 c
 ******************************************
 ** The following parameters must be set **
@@ -104,8 +101,9 @@ c
       ! 5 = Original slip rule with GND coupling 
       ! 6 = Slip rule with constants alpha and beta: alpha.sinh[ beta(tau-tauc)sgn(tau) ]
       ! 7 = Powerlaw plasticity
-      ! 8 = Double Exponent law
-      ! 9 = 'Nickel_supperalloy' coupled double exponent law and tertiary creep law (additive)
+      ! 8 = 'Nickel_supperalloy' coupled double exponent law and tertiary creep law (additive)
+      ! 9 = Tertiary creep law coupled with powerlaw plasticity (additive)
+      ! 10 = dummy Power Law used for trials only
       integer, parameter :: kslip = 9
 c
       ! initial temperature and temperature rate
@@ -119,15 +117,30 @@ c
 c
       ! accuracy of the crystal plasticity Newton-Raphson loop
       ! WARNING: change only if you know what you are doing
-      real*8, parameter :: xacc = 1.e-8  
+      real*8, parameter :: xacc = 1e-7  
 c
       ! max number of iterations of the Newton-Raphson loop
       ! WARNING: change only if you know what you are doing
-      integer, parameter :: maxNRiter = 1000  
+      integer, parameter :: maxNRiter = 10000
+      
+      ! use temperature and thermal expansion provided by Abaqus solver
+      ! through the TEMP and DTEMP variables
+      integer, parameter :: use_abaqus_temperature = 1
+
+        ! 0 = temperature in K
+	  ! 1 = temperature in C
+      integer, parameter :: temp_in_celsius = 1 
+
+      ! 1 = activate high temperature creep for CMSX-4 alloy
+      integer, parameter :: creep = 1
+      ! 1 = activate strain softening when creep=1 for CMSX-4 alloy
+      integer, parameter :: softening = 1	
 c
 **       End of parameters to set       **
 ******************************************
 c
+c      ! Stiffness matrix (Jacobian, Abaqus notation)
+
       ! dimension of the space
       INTEGER, parameter :: M=3,N=3
 c
@@ -146,6 +159,8 @@ c
 c
       ! plastic strain increment in the Newton-Raphson loop
       REAL*8 :: plasStrainInc(3,3),plasStrainInc2(6)
+      ! creep strain increment after the Newton-Raphson loop used for output     
+      REAL*8 :: creepStrainInc(3,3),creepStrainInc2(6)
 c
       ! temporary variables
       REAL*8 :: prod(M),prod6(6,6)
@@ -153,11 +168,14 @@ c
       ! temporary normals and directions of slip/twin systems
       REAL*8 :: tempNorm(M),tempDir(M)
 c
-      ! plastic strain rate
+      ! plastic & creep strain rates
       REAL*8 :: plasStrainRate(3,3)
 c
-      ! plastic velocity gradient
+      ! plastic (inelastic) velocity gradient
       REAL*8 :: Lp(3,3)
+      
+      ! creep velocity gradient
+      REAL*8 :: Lcr(3,3)
 c
       ! cumulative plastic strain (for output)
       ! vector and scalar
@@ -187,6 +205,13 @@ c
 c
       ! stress increment of the Newton-Raphson loop
       REAL*8 :: dstressinc(6)
+C  CHRISTOS     
+      ! stress increment used for dynamic incrementation
+      REAL*8 :: deltaStress(6)
+      ! stress at beg of increment used for dynamic incrementation
+      REAL*8 :: initStress(6)
+      ! vectorised total velocity gradient
+      REAL*8 :: vecL(6)
 c
       ! stress at the current increment
       ! given back to Abaqus at the end of iteration
@@ -261,7 +286,13 @@ c
       REAL*8,dimension(nSys) :: tau
       REAL*8,dimension(nSys) :: signtau
 c
-      ! plastic shear rate on slip systems
+      ! plastic strain rate on each slip system
+      REAL*8,dimension(nSys) :: gammaDotPlastic
+      
+      ! creep strain rate on each slip system
+      REAL*8,dimension(nSys) :: gammaDotCreep
+        
+      ! total inelastic strain rate on each slip system
       REAL*8,dimension(nSys) :: gammaDot
 c
       ! GND density (immobile, mobile)
@@ -320,7 +351,7 @@ c
       REAL*8 :: rhossd
 c
       ! ratio: resolved shear stress for slip / CRSS for slip
-      REAL*8 :: xtau 
+      REAL*8 :: xtau
 c
       ! twin volume fraction
       REAL*8 :: twinvolfrac(nTwin)
@@ -356,6 +387,8 @@ c
 c
       ! temporary variable for determinant
       REAL*8 :: deter
+      
+      REAL*8 :: KelvTemperature, maximumXTau, maxTau
 c
       ! flag to decide if crystal plasticity
       ! Newton-Raphson loop starts
@@ -367,7 +400,7 @@ c
       ! debug temporary variable
       integer :: debugWait
 c
-      integer :: i, j, k
+      integer :: i, j, k, iCrit
 c      
 C     *** INITIALIZE ZERO ARRAYS ***
       prod=0.
@@ -386,14 +419,17 @@ C     *** INITIALIZE ZERO ARRAYS ***
       gmatinv=0.
       dstranth=0.
       Lp = 0.
+      Lcr = 0.
       plasStrainRate = 0.
       plasStrainInc2=0.
+      creepStrainInc2=0.
       xStiff=0.0      
       xStiffdef=0.0
       C=0.0
       trialstressM=0.0
       tmat=0.0;
       plasStrainInc=0.
+      creepStrainInc=0.
       stressvec=0.
       fai=0.
       dstressinc=0.
@@ -405,6 +441,8 @@ C     *** INITIALIZE ZERO ARRAYS ***
       expanse33=0.
       curlfp=0.
       gammaDot=0.
+      gammaDotPlastic=0.
+      gammaDotCreep=0.
       xNorm=0.
       xDir=0.
       tau=0.
@@ -428,7 +466,7 @@ C     *** INITIALIZE ZERO ARRAYS ***
       rhossd = 0.0
       pdot = 0.0
       Backstress = 0.0
-c
+c                 
       ! define identity matrix
       DO I=1,KM; xIden6(I,I)=1.; END DO      
 c
@@ -436,21 +474,13 @@ c
       signtau=1.
       signtautwin=1.0
 c
-      ! calculate temperature
-c
-CHRISTOS START
-      if (singlecrystal == 1) then
-         CurrentTemperature = TEMP
-      else
-         CurrentTemperature = Temperature + ytemprate*time(2) 
-      end if
-CHRISTOS END      
+! calculate temperature
+      CurrentTemperature = TEMP+DTEMP*0.5
 c
       ! set materials constants
       call kMaterialParam(iphase,caratio,compliance,G12,thermat,
      + gammast,burgerv,nSys,tauc,screwplanes,CurrentTemperature,
-     + tauctwin,nTwin,twinon,nTwinStart,nTwinEnd,TwinIntegral,
-     + singlecrystal, cubicslip)
+     + tauctwin,nTwin,twinon,nTwinStart,nTwinEnd,cubicslip)
 c
       ! define rotation matrices due to twinning (in the lattice system)
       TwinRot = 0.0
@@ -477,12 +507,12 @@ c
 c
       ! get cumulative plastic strain rate vector
       DO i=1,6
-        totplasstran(i) = usvars(10+i)
+        totplasstran(i) = usvars(16+i)
       END DO
 c
       ! get cumulative total strain
       DO i=1,6
-        totstran(i) = usvars(16+i)
+        totstran(i) = usvars(10+i)
       END DO
 c
       ! initialize stress as the values at previous increment
@@ -549,7 +579,7 @@ c
       call kCRSS(iphase,tauc,nSys,G12,burgerv,gndtot,irradiate,
      + tauSolute,gndcut,rhofor,rhosub,CurrentTemperature,homogtwin,
      + nTwinStart,nTwinEnd,twinvolfrac,tauctwin,nTwin,TwinIntegral,
-     + twinvolfractotal,twinon,singlecrystal)
+     + twinvolfractotal,twinon)
 c
       ! Reorient stiffness tensor if twins are present
       ! weighting using twin volume fraction
@@ -577,7 +607,7 @@ c
 C     *** DIRECTIONS FROM LATTICE TO DEFORMED AND TWINNED SYSTEM ***
 
       CALL kdirns(gmatinv,TwinRot,iphase,nSys,nTwin,xDir,xNorm,
-     + xTwinDir,xTwinNorm,caratio, cubicslip)
+     + xTwinDir,xTwinNorm,caratio,cubicslip)
 c
 c
 C     *** STIFFNESS FROM LATTICE TO DEFORMED SYSTEM ***
@@ -589,22 +619,20 @@ c
 c
       xStiffdef = matmul(prod6,tSigtranspose)
 c
-      ! rotate the thermal eigenstrain in the sample reference system   
-      expanse33 = matmul(matmul(gmatinv,thermat),transpose(gmatinv))
-CHRISTOS START      
-      if (singlecrystal == 1) then
-         expanse33 = expanse33*DTEMP  !dstrain = alpha*dT
-      else
-         expanse33 = expanse33*ytemprate*dtime !dstrain = alpha*dT 
-      end if
-CHRISTOS END      
 c
-      CALL kmatvec6(expanse33,dstranth)
-      dstranth(4:6) = 2.0*dstranth(4:6)
+c   ! Only for temperature & expansion defined here in UMAT 
+        ! rotate the thermal eigenstrain in the sample reference system   
+        expanse33 = matmul(matmul(gmatinv,thermat),transpose(gmatinv))
+        
+        expanse33 = expanse33*DTEMP
+          
+        CALL kmatvec6(expanse33,dstranth)
+        dstranth(4:6) = 2.0*dstranth(4:6)    
 c
 c
 C     *** DETERMINE INCREMENT IN TOTAL STRAIN (6X1) ***
 c
+        
       tempstrain=(L+transpose(L))*0.5*dtime
       spin=(L-transpose(L))*0.5
 c
@@ -615,11 +643,20 @@ c
 C     *** COMPUTE TRIAL STRESS ***
 c
       DO i=1,6
-          stressvec(i) = xstressdef(i) ! old stress
+          stressvec(i) = xstressdef(i)  ! old stress
+          initStress(i) = stressvec(i)  ! stress at beg of increment used for dynamic incrementation (CHRISTOS)
       END DO
-c
-      trialstress = stressvec+matmul(xStiffdef,dtotstran)
-     + -matmul(xStiffdef,dstranth)            
+
+c     For temperature & thermal expansion denined in abaqus the total strain is only mechanical
+      trialstress = stressvec+matmul(xStiffdef,dtotstran)    
+      
+c   ! Only for temperature & expansion defined here in UMAT
+c      subtract thermal strain from total strain
+c      if (use_abaqus_temperature == 0) then
+       
+       trialstress=trialstress-matmul(xStiffdef,dstranth) 
+c      end if
+      
       CALL kvecmat6(trialstress,trialstressM)
 c
       CALL kvecmat6(stressvec,stressM)
@@ -633,7 +670,7 @@ C     *** AS TRIAL STRESS				            ***
 c
       DO I=1,nSys
         tempNorm = xNorm(I,:); tempDir = xDir(I,:)
-        prod = matmul(stressM,tempNorm)
+        prod = matmul(trialstressM,tempNorm)
         tau(I)= dot_product(prod,tempDir)
         signtau(I) = 1.d0      
         IF(tau(I) .LT. 0.0) THEN
@@ -663,8 +700,8 @@ C     *** PLASTIC DEFORMATION ***
 c
       ! decide if Newton Raphson loop starts
       EnterNRLoop = 0
-      if (xtau >= 0.5 .or. xtautwin >= 0.5) then ! stress condition
-        EnterNRLoop = 1
+      if (xtau > 0.0 .or. xtautwin >= 0.5) then ! stress condition
+        EnterNRLoop = 1.0               
       else
         ! twinvolfrac > 0.5 is needed for twin completion
         ! in the discrete twin model
@@ -683,7 +720,8 @@ c
         debugwait = 0
       end do
 c
-c
+CCCCCCCCCCCCCCCCCCCCCCCCCCC
+   
       faivalue=1.
       iter=0
       fpold = Fp
@@ -727,20 +765,26 @@ c
      +        rhossd,twinvolfrac,twinvolfractotal,
      +        Lp,tmat,gammaDot,gammatwindot,twinon,
      +        nTwinStart,nTwinEnd)
-c      
+c            
       ELSE IF (kslip == 8) THEN 
-      ! Double Exponent law 
-c      
-      CALL  kslipDoubleExponent(xNorm,xDir,tau,signtau,tauc,
-     + burgerv,dtime,nSys,iphase,CurrentTemperature,Backstress,Lp,
-     + tmat,gammaDot)
-c      
-      ELSE IF (kslip == 9) THEN 
-      ! Plasticity-tertiary creep law for Nickel superalloys
+      ! Double exponent law coupled with tertiary creep law
 c      
       CALL  NickelSuperalloy(xNorm,xDir,tau,signtau,tauc,
      + burgerv,dtime,nSys,iphase,CurrentTemperature,Lp,
-     + tmat,gammaDot, cubicslip, creep, usvars, nsvars)
+     + tmat,gammaDot,cubicslip,creep,usvars,nsvars)
+c      
+      ELSE IF (kslip == 9) THEN 
+      ! Power law coupled with tertiary creep law
+c      
+      CALL  kslipCreepPowerLaw(xNorm,xDir,tau,signtau,tauc,dtime,
+     + nSys,iphase,CurrentTemperature,Lp,Lcr,tmat,gammaDot,gammaDotPlastic,
+     + gammaDotCreep,cubicslip,creep,softening,usvars,nsvars)
+      
+      ELSE IF (kslip == 10) THEN 
+          
+      CALL  dummyPowerLaw(xNorm,xDir,tau,signtau,tauc,
+     +  dtime,nSys,Lp,
+     +  tmat,gammaDot)
 c
       END IF
 c
@@ -749,7 +793,7 @@ c
 c
           call Mutexlock( 10 )   ! lock Mutex #5
 c         
-          pnewdt = 0.5 
+          pnewdt = 0.1 
       ! if sinh( ) has probably blown up then try again with smaller dt
           write(*,*) "*** WARNING tmat  = NaN: jelem, kint, time: ", 
      +        jelem, kint, time
@@ -769,8 +813,8 @@ C     *** DETERMINE PLASTIC STRAIN INCREMENTS
 c
       plasStrainInc = (Lp+transpose(Lp))*0.5*dtime
       CALL kmatvec6(plasStrainInc,plasStrainInc2)
-      plasStrainInc2(4:6) = 2.0*plasStrainInc2(4:6)            
-c
+      plasStrainInc2(4:6) = 2.0*plasStrainInc2(4:6)
+      
 c
 C     *** CALCULATE THE STRESS INCREMENT ***
 c
@@ -825,7 +869,7 @@ c
         END DO
       end if ! twin active
 c
-      xtau = maxval(tau/tauc) 
+      xtau = maxval(tau/tauc)
       xtautwin = maxval(tautwin/tauctwin)
 c
       IF (iter .gt. maxNRiter) THEN
@@ -835,8 +879,11 @@ c
           pnewdt = 0.5
           WRITE(*,*) "WARNING NEWTON LOOP NOT CONVERGED: jelem, kint, 
      +         time:", jelem, kint, time(1)
-          WRITE(*,*) "fai", fai
-          WRITE(*,*) "stressM", stressM
+c          WRITE(*,*) "fai", fai
+c          WRITE(*,*) "stressM", stressM
+          
+c          WRITE(*,*) "gammaDot", gammaDot
+c          WRITE(*,*) "gamma", usvars(90:107)
 c
           call MutexUnlock( 11 )   ! unlock Mutex
 c
@@ -846,6 +893,8 @@ c
 c
       !!*** THE END OF NEWTON ITERATION ***
       END DO
+c      WRITE(*,*) "E", xStiffdef
+
 c	
 c         
 C     *** NOW CALCULATE THE JACOBIAN***
@@ -910,12 +959,17 @@ c
 C     *** ELASTIC DEFORMATION ***     
       ELSE
           xstressmdef = trialstressM
-          C = xStiffdef      
+          C = xStiffdef
       END IF ! end of PLASTIC DEFORMATION
 c      
       CALL kmatvec6(xstressmdef,xstressdef) !output stress
       devstress = xstressmdef - 1./3.*trace(xstressmdef)*xI  !deviatoric
       vms = sqrt(3./2.*(sum(devstress*devstress))) !von mises stress 
+      
+CHRISTOS - stress increment used for dynamic incrementation
+      deltaStress=xstressdef-initStress
+      
+c
 c
 c
 C     *** ORIENTATION UPDATE ***
@@ -1013,6 +1067,13 @@ c
       EECrys = matmul(matmul(transpose(gmatinv),EECrys),gmatinv)
 c             
 c
+c   CREEP STRAIN increment by Christos
+      creepStrainInc = (Lcr+transpose(Lcr))*0.5*dtime
+      CALL kmatvec6(creepStrainInc,creepStrainInc2)
+      creepStrainInc2(4:6) = 2.0*creepStrainInc2(4:6)
+c
+c
+c
 C     *** UPDATE STATE VARIABLES *** !
 c
       DO i=1,3
@@ -1022,35 +1083,65 @@ c
       END DO
 c
       usvars(10) = p
-c 
+c
+c
+C vars 32-33 modified by Christos
+      usvars(32) = maxval(abs(plasStrainrate))  ! used for dynamic incrementation
+      usvars(33) = maxval(abs(deltaStress))   ! used for dynamic incrementation
+ccc   
+c      usvars(26) = gndtot   
+c      usvars(34) = xtau
+c      usvars(35) = slip
+c      usvars(36) = tauSolute
+c      usvars(54) = rhossd
+c      usvars(55) = vms
+c      usvars(56) = maxval(tauc)
+ccc     
+      maximumXTau=0.0
+      do i=1,nSys
+          if (tau(i)/tauc(i) > maximumXTau) then
+             maximumXTau= tau(i)/tauc(i)
+             maxTau=tau(i)
+             iCrit=i
+          end if
+      end do
+
+      usvars(54) = maximumXTau
+      usvars(55) = maxTau
+      usvars(56) = iCrit
+          
+ccc      
+c
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+c    TOTAL STRAIN OUTPUT
+        DO i=1,6       
+          usvars(10+i) = totstran(i) + dtotstran(i) -dstranth(i)
+        END DO
+c
+c    PLASTIC STRAIN OUTPUT
       DO i=1,6
-        usvars(10+i) = totplasstran(i) + plasStrainInc2(i)
+         usvars(16+i) = usvars(16+i) + plasStrainInc2(i)   
       END DO
 c
+c    STRESS OUTPUT     
       DO i=1,6
-        usvars(16+i) = totstran(i) + dtotstran(i)
+        usvars(47+i) = xstressdef(i)
       END DO
-c 
-      usvars(26) = gndtot   
-c      
-      DO i=1,6
-       usvars(47+i) = xstressdef(i)
-      END DO
-c
-      usvars(32) = maxval(plasStrainrate)
-      usvars(33) = pdot
-      usvars(34) = xtau
-      usvars(35) = slip
-      usvars(36) = tauSolute
-      usvars(54) = rhossd
-      usvars(55) = vms
-      usvars(56) = maxval(tauc)
-c     
-      !GNDs on indiviual systems
-      !max(nSys) is currently limited to 24. IF all 48 of bcc is needed, storage should be raised to match that!
-      DO i=1,nSys
-       usvars(56+i) = gndcut(i)
-      END DO
+
+CCCCC MODIFIED BY CHRISTOS CCCCC
+      if (kslip == 9 .or. kslip == 10) then
+c    CREEP STRAIN OUTPUT
+        DO i=1,6       
+          usvars(56+i) = usvars(56+i) + creepStrainInc2(i)
+        END DO
+      else
+        !GNDs on indiviual systems
+        !max(nSys) is currently limited to 24. IF all 48 of bcc is needed, storage should be raised to match that!
+        DO i=1,nSys
+         usvars(56+i) = gndcut(i)
+        END DO 
+      end if	  
+CCCCCCCCCCCCCCCCCCCCcccccccccccCCCCCCCCCC
 c      
       usvars(71) = Temperature    
 c
@@ -1088,22 +1179,15 @@ c     Output for orthorombic alpha-Uranium material
           usvars(112+i) = tauctwin(i)
         END DO
       end if
-c     
-!=======================CHRISTOS OUTPUT=======================             
-      if (singlecrystal == 1) then
-        do i=1,nSys
-          !  shear strain rate in slip systems          
-!          usvars(89+i) = gammaDot(i)
-          ! accumulated shear strains in slip systems          
-          usvars(89+i) = usvars(89+i) +  gammaDot(i) * dtime
-          ! RSS in slip systems
-          usvars(107+i) = tau(i)
-        end do
-          ! maximum RSS
-          usvars(125)=maxval(abs(tau))
-          usvars(126)=usvars(95)
-      end if           
-!============================================================
+c
+c  Fatigue Output for CMSX-4 alloy
+      if (kslip == 9 .or. kslip == 10) then
+          
+          CALL  FatigueLife(tau,signtau,time,dtime,CurrentTemperature,DTEMP,
+     +          nSys,gammaDot,gammaDotPlastic,gammaDotCreep,
+     +          cubicslip,creep,usvars,nsvars)
+
+      end if
 c
       RETURN
 c

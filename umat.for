@@ -24,18 +24,6 @@ c
 c
 ******************************************
 ** The following parameters must be set **
-c
-CHRISTOS START     
-      ! activate case of single crystal body
-c The temperature field, the load and the periodic boundary conditions are respectively defined in: UDISP, DLOAD, MPC      
-      ! 0 = off ; 1 = on 
-      integer, parameter :: singlecrystal = 1
-c Activate cubic slip systems for single crystal FCC
-      integer, parameter :: cubicslip = 0
-c Activate tertiary creep for single crystal FCC
-      integer, parameter :: creep = 1          
-c      
-CHRISTOS END      
 c      
       ! activate debug mode with Visual Studio
       ! 0 = off ; 1 = on
@@ -61,13 +49,33 @@ c
       ! activate irradiation effect
       ! 0 = off ; 1 = on 
       integer, parameter :: irradiate = 0
-c
+      
+c Activate cubic slip systems for single crystal FCC
+      integer, parameter :: cubicslip = 1
+      
+c Activate dynamic incrementation for cyclic plasticity-creep analysis
+      integer, parameter :: dynIncrementation = 1     
+      
+CCCCCC incrementation parameters for cyclic plasticity-creep analysis
+
+      ! max allowable stress increment
+      real*8, parameter :: maxStressInc = 50.0
+      ! max time increment when max stress increment is exceeded
+      real*8, parameter :: maxDtStress = 10.0
+      real*8 :: ratioDtStress
+      
+      ! muliplier and exponent related to plastic strain rate
+      
+      real*8, parameter :: multiDt = 0.011
+      real*8, parameter :: powerDt = -0.65
+      real*8 :: ratioDtpStrain
+CCCCCCC
 **       End of parameters to set       **
 ******************************************
 c
       ! dimension of the space
-      PARAMETER (M=3,N=3)  
-c
+      PARAMETER (M=3,N=3)     
+
       ! Gauss points coordinates of the parent C3D8 element
       DIMENSION gauss(8,3), gausscoords(3,8)
 c
@@ -127,7 +135,7 @@ c
       ! number of active slip systems considered
       integer :: L0=12 ! HCP
       integer :: L1=12 ! BCC
-      integer :: L2 ! FCC   (Christos uses it as a variable)
+      integer :: L2 ! FCC: variable because cubic systems can be included
       integer :: L4=7  ! Olivine
       integer :: LalphaUranium=8 ! alpha-uranium
 c      
@@ -182,13 +190,13 @@ c
           return
       end if   
 c
-CHRISTOS START - increase slip systems if cubic slip is activated     
+C increase slip systems if cubic slip is activated     
       if (cubicslip == 0) then
         L2=12
       else  
         L2=18
       end if
-CHRISTOS END      
+ 
       ! read crystal type from input file
       ! first material constant
       iphase = int(props(1))      
@@ -221,6 +229,7 @@ c
       case default      
       WRITE(*,*)"Not sure what crystal type. Material constants."
       END SELECT
+      
 c	  
 	  ! assign number of twins to initialize
 	  ! arrays with the right size in kmat
@@ -229,8 +238,10 @@ c
 C     WRITE PROPS INTO SVARS TO INITIALIZE (ONCE ONLY),
 c
       if (kinc <= 1 .and. kstep==1) then
-c
+c     
          STATEV = 0.
+         
+         STATEV(57) = COORDS(2)
 c      
          ! read rotation matrix from the material constants
          ! 2 to 10 in the input file
@@ -364,9 +375,10 @@ C   DETERMINE DEFORMATION AND VELOCITY GRADIENTS
 c
       ! assign curl of plastic deformation gradient
       ! to state variables for output
-      DO i=1,9
-          statev(37+i) = kcurlfp(noel,npt,i)
-      END DO
+c      DO i=1,9
+c          statev(37+i) = kcurlfp(noel,npt,i)
+c      END DO  
+      
 c
 ! calculate integral of the twin volume fraction
 ! for the two twin systems
@@ -385,15 +397,36 @@ c
         end if ! check increment
 c
       end if ! active twin
+      
+      
+CCCccc   Dynamic incrementation for cyclic analysis of CMSX-4
+      if (dynIncrementation == 1) then
+        ! suggested incr ratio related to plastic strain (continuous)
+        if (kinc >= 1) then
+           ratioDtpStrain = (multiDt*STATEV(32)**powerDt)/dtime
+        end if 
+      
+        ! upper bound of incr ratio used when stress increment is exceeded (non-continuous)
+        if (STATEV(33) > maxStressInc) then 
+           ratioDtStress=maxDtStress/dtime
+        else
+           ratioDtStress=10000.0   ! arbitrary high value
+        end if
+      
+        ! use the minimum of the 2 criteria
+        pnewdt=min(ratioDtpStrain,ratioDtStress)
+      end if   
+ccccccccccccccccccccccccccccccccccccccc      
 c      
+
 C   CALL KMAT FOR MATERIAL BEHAVIOUR - Global stiffness matrix C
 C      and stress 
 c
       call kmat(dtime,NSTATV,STATEV,xI,NOEL,NPT,time,F,
      +    L,iphase,irradiate,DDSDDE,stressvec,dstressinc,totstran,
      +    dtotstran,TEMP,DTEMP,vms,pdot,pnewdt,gndon,nSys,nTwin,ns,
-     +    coords,TwinIntegral,nTwinStart,nTwinEnd,twinon,singlecrystal,
-     +    cubicslip, creep)
+     +    coords,TwinIntegral,nTwinStart,nTwinEnd,twinon,cubicslip)
+      
 c
       ! store twin phase field
       ! in common block variable
@@ -404,16 +437,15 @@ c
 c
       ! store UEL variable in STATEV
       ! for output
-C CHRISTOS      
-      if (singlecrystal == 0) then
-        STATEV(124) = kDeltaEff(noel,npt)
-        STATEV(125) = kSigma0(noel,npt)
-      end if  
+c        STATEV(124) = kDeltaEff(noel,npt)
+c        STATEV(125) = kSigma0(noel,npt)
+
 c
 C    RECOVER stress for calculating residual force
       DO K=1,6
            stress(K)=STATEV(47+K)
       END DO
+          
 c
       ! GND calculations
       if (gndon == 1) then
@@ -449,14 +481,14 @@ C=======================================================================
 C   A FULL INTEGRATION GRADIENT SCHEME
 c
           CALL kcurlET(curlFp,Fp,xnat,gauss,gausscoords) 
- ! faster and cleaned up version but same result as kcurl
+! faster and cleaned up version but same result as kcurl
 c      
           call MutexLock( 6 )      ! lock Mutex #6
             kcurlFp(noel,1:8,1:9) = curlFp(1:8,1:9)     
           call MutexUnlock( 6 )      ! unlock Mutex #6  
 c    
           END IF ! 8 IP check
-      end if
+      end if   
 c          
       RETURN
 c
@@ -481,12 +513,13 @@ c
       include 'kCRSS.f'
       include 'kHardening.f'
 CHRISTOS START
-c      include 'ORIENT.f'
-c      include 'MPC.f'
+      include 'MPC.f'
       include 'DISPfull.f'
-      include 'DLOADfull.f'
-      include 'kslipDoubleExponent.f'
+      include 'DLOADpnet.f'
       include 'NickelSuperalloy.f'
+      include 'kslipCreepPowerLaw.f'
+      include 'dummyPowerLaw'
+      include 'FatigueLife'
 CHRISTOS END  
 
             

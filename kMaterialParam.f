@@ -4,23 +4,17 @@
 ********************************************
 c
       SUBROUTINE kMaterialParam(iphase,caratio,compliance,G12,thermat,
-     + gammast,burgerv,nSys,tauc,screwplanes,Temperature,
-     + tauctwin,nTwin,twinon,nTwinStart,nTwinEnd,TwinIntegral,
-     + singlecrystal, cubicslip)
+     + gammast,burgerv,nSys,tauc,screwplanes,CurrentTemperature,
+     + tauctwin,nTwin,twinon,nTwinStart,nTwinEnd,cubicslip)
 c
       ! crystal type
       INTEGER,intent(in) :: iphase
-c      
-CHRISTOS START
-      INTEGER,intent(in) :: singlecrystal
-      INTEGER,intent(in) :: cubicslip
-CHRISTOS END            
 c
       ! number of slip systems
       INTEGER,intent(in) :: nSys
 c
       ! current temperature
-      REAL*8,intent(in) :: Temperature
+      REAL*8,intent(in) :: CurrentTemperature
 c
       ! total number of twin systems
       INTEGER,intent(in) :: nTwin
@@ -32,6 +26,9 @@ c
       ! interval [nTwinStart,nTwinEnd] in the
       ! twin system file
       INTEGER,intent(in) :: nTwinStart,nTwinEnd
+      
+      ! activate cubic slip systems for CMSX-4 alloy
+      INTEGER,intent(in) :: cubicslip 
 c
       ! c/a ratio for hcp crystals
       REAL*8,intent(out) :: caratio
@@ -68,7 +65,8 @@ c
       ! by modifying this subroutine
       ! materials available are the following:
       ! 'zirconium', 'alphauranium', 'tungsten', 'copper', 'carbide',
-      ! 'olivine', 'CMSX4' (Nickel alloy)
+      ! 'olivine', 'CMSX4' (Nickel alloy), 
+      ! 'dummy'
       character(len=*), parameter :: matname = 'CMSX4' 
 c
 **       End of parameters to set       **
@@ -80,9 +78,7 @@ c
       ! Elastic constants scalars
       REAL*8 :: E1, E2, E3, G13, v12, v13
       REAL*8 :: G23, v23
-CHRISTOS START      
       REAL*8 :: C11, C12
-CHRISTOS END      
 c
       ! hcp: basal critical resolved shear stress
       REAL*8 :: XTAUC1
@@ -97,6 +93,13 @@ c
       REAL*8 :: alpha1, alpha2, alpha3
 c
       INTEGER :: i, j
+c      
+      REAL(8), DIMENSION (30000, 2)::coordY
+      COMMON /myblock/ coordY
+      IF (KINC .EQ. 1) THEN
+           coordY(kint,1)= coords(2)
+      END IF
+c      
 c
       ! select crystal type       
       SELECT CASE(iphase)
@@ -214,53 +217,86 @@ c
         ! thermal expansion coefficient
         alpha1 = 13.0e-6
 c
-CHRISTOS START         
+      
         case('CMSX4')
 c
         ! CRSS (MPa units)
-        if (Temperature .LE. 850.0) then   !  Celcius units
-           tauc=-0.000000001051*Temperature**4 
-     +                 + 0.000001644382*Temperature**3
-     +                -0.000738679333*Temperature**2 + 0.128385617901*Temperature 
-     +                +446.547978926622
+        if (CurrentTemperature .LE. 850.0) then   !  Celcius units
+            
+           tauc= - 0.000000002747*CurrentTemperature**4 + 
+     +      0.00000406226*CurrentTemperature**3 -
+     +      0.001804434577*CurrentTemperature**2 + 
+     +      0.283331306694*CurrentTemperature + 443.486662101576
+     +    
+           
+           
            if (cubicslip == 1) then
-             tauc(13:18)=-0.000000001077*Temperature**4 
-     +                + 0.000001567820*Temperature**3
-     +                -0.000686532147*Temperature**2 - 0.074981918833*Temperature 
-     +                +571.706771689334
+               
+            tauc(13:18)= - 0.000000003015*CurrentTemperature**4 + 
+     +            0.000004049484*CurrentTemperature**3 -
+     +            0.001562909077*CurrentTemperature**2 - 
+     +            0.045398490926*CurrentTemperature + 
+     +            572.006577948933
+             
            end if
+           
         else
-           tauc=-1.1707*Temperature + 1478.9
+            
+           tauc= - 1.0127*CurrentTemperature + 1297.0
+           
            if (cubicslip == 1) then
-             tauc(13:18)=-0.9097*Temperature + 1183
+               
+               tauc(13:18)= - 0.000005056400*CurrentTemperature**3 +
+     +           0.014514396250*CurrentTemperature**2 -
+     +           14.327608662266*CurrentTemperature + 
+     +           5116.666865353410
+               
            end if
         end if
 c
-c
         ! temperature dependent stiffness constants (MPa units)
-        if (Temperature .LE. 800.0) then   !  Celcius units
-           C11=-40.841*Temperature +251300
-           C12=-14.269*Temperature +160965
+        if (CurrentTemperature .LT. 800.0) then   !  Celcius units
+            
+           C11= - 40.84097*CurrentTemperature + 251300.0
+           C12= 0.00490*CurrentTemperature**2 - 
+     +           18.28947*CurrentTemperature + 161411.57
+           
+        elseif (CurrentTemperature .LT. 1000.0) then   !  Celcius units
+           
+          C11=-95.0*CurrentTemperature +294000.0
+          C12=-45.0*CurrentTemperature +186000.0
+            
         else
-       C11=0.111364*Temperature**2-295.136*Temperature+382827
-       C12=-0.000375*Temperature**3+1.3375*Temperature**2
-     +              -1537.5*Temperature+716000
+            
+          C11= 0.1*CurrentTemperature**2 - 270.0*CurrentTemperature 
+     +      + 369000.0
+          C12= 0.1*CurrentTemperature**2 -180.0*CurrentTemperature 
+     +      +221000.0
+          
         end if  
-        G12=-0.00002066*Temperature**3+0.021718*Temperature**2
-     +       -38.3179*Temperature+129864
-c        C11=199E3 (temperature idnependent case - for verification)
-c        C12=141E3
-c        G12=93E3
+        
+        G12= - 0.00002066*CurrentTemperature**3 + 
+     +      0.02171794*CurrentTemperature**2 -
+     +      38.3179*CurrentTemperature + 129864.0
+        
         E1 = (C11-C12)*(C11+2*C12)/(C11+C12)
         v12 = E1*C12/((C11-C12)*(C11+2*C12))
 c
-        ! temperature dependent thermal expansion coefficient
-        alpha1 = 9.119E-9*Temperature +1.0975E-5
-c       alpha1 = 20.1E-6  (temperature idnependent case - for verification)
-c
-        ! prefactor for SSD evolution equation
-        gammast = 0.0
-CHRISTOS END        
+        ! temperature dependent thermal expansion coefficient (secant)
+c        alpha1 = 9.119E-9*CurrentTemperature +1.0975E-5
+        ! temperature dependent thermal expansion coefficient (instantaneous)
+        alpha1= 2*8.808398E-09*CurrentTemperature + 1.129877E-05
+        alpha1=alpha1*0.83
+           
+        case('dummy')
+c            
+           tauc=300000.0
+           C11=250000
+           C12=161000
+           G12=129000
+           E1 = (C11-C12)*(C11+2*C12)/(C11+C12)
+           v12 = E1*C12/((C11-C12)*(C11+2*C12))
+           alpha1 = 1E-5
 c
         case default
         WRITE(*,*)"Not sure what material"
